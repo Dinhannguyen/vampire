@@ -1,0 +1,91 @@
+repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = game.Players.LocalPlayer
+
+-- Chờ player spawn và có tọa độ
+local root = nil
+local function waitForSpawn()
+    repeat task.wait(1) until player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    root = player.Character:FindFirstChild("HumanoidRootPart")
+    repeat task.wait(0.5) until root and root.Position
+    print("✅ Player đã spawn tại tọa độ:", root.Position)
+end
+
+-- Lấy inventory từ RemoteFunction
+local function getInventory()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return nil end
+    local commF = remotes:FindFirstChild("CommF_")
+    if not commF or not commF.InvokeServer then return nil end
+    local success, result = pcall(function()
+        return commF:InvokeServer("getInventory")
+    end)
+    return success and typeof(result) == "table" and result or nil
+end
+
+-- Đếm Vampire Fang
+local function countItems(inv)
+    local counts = {
+        ["vampire fang"] = 0
+    }
+    if not inv then return counts end
+
+    for _, item in ipairs(inv) do
+        local name = tostring(item.Name or item.name or ""):lower()
+        local amount = tonumber(item.Count or item.count or item.Amount or item.amount or 1) or 1
+        if name:find("vampire") and name:find("fang") then
+            counts["vampire fang"] = counts["vampire fang"] + amount
+        end
+    end
+    return counts
+end
+
+-- Gửi file Completed-art
+local fileSent = false
+local function sendFile()
+    if fileSent then return end
+    local filename = player.Name .. ".txt"
+    if not isfile(filename) then
+        local success, _ = pcall(function()
+            writefile(filename, "Completed-art")
+        end)
+        if success then
+            fileSent = true
+            print("✅ File created:", filename, "with content: Completed-art")
+        end
+    else
+        fileSent = true
+    end
+end
+
+-- Chờ spawn xong trước khi chạy script
+waitForSpawn()
+
+-- Kiểm tra root hợp lệ
+if not root or not root.Position then
+    warn("❌ Không tìm thấy HumanoidRootPart hoặc vị trí!")
+    return
+end
+
+print("🔁 Bắt đầu check Vampire Fang...")
+
+-- Vòng lặp check liên tục
+while true do
+    local finalCounts
+
+    -- Check kỹ 5 lần, mỗi lần 2 giây
+    for i = 1, 5 do
+        local inv = getInventory()
+        finalCounts = countItems(inv)
+        print(string.format("Check %d/5: Vampire Fang=%d", i, finalCounts["vampire fang"]))
+        task.wait(2)
+    end
+
+    -- Nếu Vampire Fang >=20 thì gửi file
+    if finalCounts["vampire fang"] >= 20 then
+        sendFile()
+    end
+
+    task.wait(3) -- đợi trước khi check tiếp
+end
+

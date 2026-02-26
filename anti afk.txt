@@ -1,0 +1,112 @@
+local CHECK_INTERVAL = 5         -- kiểm tra mỗi 5 giây
+local MAX_IDLE_TIME = 300        -- 5 phút (300 giây)
+local MAX_HOP_RETRIES = 50
+
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
+
+local lastPosition = nil
+local idleTime = 0
+
+local function notify(title, text, duration)
+    pcall(function()
+        game.StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 5
+        })
+    end)
+end
+
+local function getRequestFunc()
+    if syn and syn.request then return syn.request end
+    if http and http.request then return http.request end
+    if request then return request end
+    if http_request then return http_request end
+    return nil
+end
+
+local requestFunc = getRequestFunc()
+
+local function getServerList()
+    local placeId = game.PlaceId
+    local apiUrl = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
+    local success, result = pcall(function()
+        if requestFunc then
+            local response = requestFunc({Url = apiUrl, Method = "GET"})
+            if response and response.Body then
+                return HttpService:JSONDecode(response.Body)
+            end
+        else
+            local response = HttpService:GetAsync(apiUrl)
+            return HttpService:JSONDecode(response)
+        end
+    end)
+    if success and result and result.data then
+        return result.data
+    end
+    return nil
+end
+
+local function hopServer()
+    local servers = getServerList()
+    if not servers then return false, "Không lấy được danh sách server" end
+    local currentJobId = game.JobId
+    for _, server in ipairs(servers) do
+        if server.id ~= currentJobId and server.playing < server.maxPlayers then
+            local ok, err = pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, player)
+            end)
+            if ok then
+                return true, "Đã hop server thành công!"
+            end
+        end
+    end
+    return false, "Không tìm thấy server phù hợp!"
+end
+
+local function monitorIdle()
+    while true do
+        wait(CHECK_INTERVAL)
+        local character = player.Character or player.CharacterAdded:Wait()
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if root then
+            local currentPos = root.Position
+            if lastPosition and (currentPos - lastPosition).magnitude < 1 then
+                idleTime = idleTime + CHECK_INTERVAL
+            else
+                idleTime = 0
+                lastPosition = currentPos
+            end
+            if idleTime >= MAX_IDLE_TIME then
+                notify("AFK", "Đứng yên quá lâu! Đang hop server...", 5)
+                local hopSuccess = false
+                local retryCount = 0
+                while not hopSuccess and retryCount < MAX_HOP_RETRIES do
+                    retryCount = retryCount + 1
+                    notify("Hop Server", "Thử lần " .. retryCount, 2)
+                    local success, msg = hopServer()
+                    if success then
+                        hopSuccess = true
+                        notify("Hop Server", "Thành công!", 4)
+                        break
+                    else
+                        wait(2)
+                    end
+                end
+                if not hopSuccess then
+                    notify("Hop Server", "Thất bại! Đang kick...", 6)
+                    wait(2)
+                    player:Kick("Đứng yên quá lâu và không thể hop server sau 50 lần thử. Vui lòng rejoin!")
+                end
+                idleTime = 0
+                lastPosition = root.Position
+            end
+        end
+    end
+end
+
+print("✅ AFK Monitor loaded! Nếu đứng yên quá 5 phút sẽ tự động hop server.")
+monitorIdle()

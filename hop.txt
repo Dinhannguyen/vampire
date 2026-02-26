@@ -1,0 +1,169 @@
+-- Blox Fruits Auto-Hop Script with Blacklist and GUI
+
+-- Services
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Local Player
+local player = Players.LocalPlayer
+local username = player.Name
+local blacklistFile = "blacklist.json"
+
+-- Blacklist Management
+local function loadBlacklist()
+    if isfile(blacklistFile) then
+        local content = readfile(blacklistFile)
+        return HttpService:JSONDecode(content) or {}
+    else
+        return {}
+    end
+end
+
+local function saveBlacklist(blacklist)
+    writefile(blacklistFile, HttpService:JSONEncode(blacklist))
+end
+
+-- Add own username to blacklist if not already present
+local blacklist = loadBlacklist()
+if not table.find(blacklist, username) then
+    table.insert(blacklist, username)
+    saveBlacklist(blacklist)
+end
+
+-- Hop Function with Retry
+local function hopServer()
+    while true do
+        local success, err = pcall(function()
+            -- Get list of servers
+            local serversUrl = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+            local response = game:HttpGet(serversUrl)
+            local servers = HttpService:JSONDecode(response).data
+            
+            -- Find a random server with players (avoid full or empty if possible)
+            local availableServers = {}
+            for _, server in ipairs(servers) do
+                if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                    table.insert(availableServers, server.id)
+                end
+            end
+            
+            if #availableServers > 0 then
+                local randomServer = availableServers[math.random(1, #availableServers)]
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, randomServer, player)
+            else
+                -- Fallback to simple teleport if no servers found
+                TeleportService:Teleport(game.PlaceId, player)
+            end
+        end)
+        
+        if success then
+            break -- teleport succeeds → stop loop
+        else
+            wait(5) -- retry after 5s
+        end
+    end
+end
+
+-- GUI Setup
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoHopGUI"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 300, 0, 50)
+frame.Position = UDim2.new(0.5, 0, 1, -10)
+frame.AnchorPoint = Vector2.new(0.5, 1)
+frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+frame.BackgroundTransparency = 0.5
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 1, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.TextSize = 18
+statusLabel.Font = Enum.Font.SourceSansBold
+statusLabel.Text = "Auto-Hop Active"
+statusLabel.Parent = frame
+
+-- Function to update GUI status
+local function updateStatus(text)
+    statusLabel.Text = text
+end
+
+-- Variables for Anti-Idle & No-Spawn
+local idleTime = 0
+local noSpawnTime = 0
+local lastPosition = nil
+local checkInterval = 1  -- Check every second
+local blacklistChecked = false
+
+-- Main Loop
+spawn(function()
+    while true do
+        wait(checkInterval)
+        
+        -- Only check blacklist once after player spawn
+        if not blacklistChecked and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            blacklist = loadBlacklist()
+            for _, blUsername in ipairs(blacklist) do
+                if blUsername ~= username and Players:FindFirstChild(blUsername) then
+                    for i = 10, 1, -1 do
+                        updateStatus("Blacklisted player detected! Hopping in " .. i .. "s")
+                        wait(1)
+                    end
+                    hopServer()
+                    break
+                end
+            end
+            blacklistChecked = true
+        end
+
+        -- Check No Spawn
+        if not player.Character then
+            noSpawnTime = noSpawnTime + checkInterval
+            if noSpawnTime > 120 then
+                updateStatus("No spawn detected! Hopping...")
+                hopServer()
+            end
+        else
+            noSpawnTime = 0
+            -- Check Idle
+            local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                local currentPosition = humanoidRootPart.Position
+                if lastPosition and (currentPosition - lastPosition).Magnitude < 1 then
+                    idleTime = idleTime + checkInterval
+                    if idleTime > 120 then
+                        updateStatus("Idle detected! Hopping...")
+                        hopServer()
+                    end
+                else
+                    idleTime = 0
+                end
+                lastPosition = currentPosition
+            end
+        end
+
+        -- Reset GUI text
+        if statusLabel.Text ~= "Auto-Hop Active" then
+            wait(2)
+            updateStatus("Auto-Hop Active")
+        end
+    end
+end)
+
+-- Anti-AFK (to prevent Roblox kick)
+spawn(function()
+    while true do
+        wait(60)  -- Every minute
+        local vu = game:GetService("VirtualUser")
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new())
+    end
+end)
